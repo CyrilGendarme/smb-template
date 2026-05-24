@@ -61,3 +61,60 @@ If the server name is not resolved by DNS/NetBIOS, use the server LAN IP instead
 - This is a lab template; change default passwords before regular use.
 - Keep both machines on a trusted/private network profile.
 - Avoid enabling SMB over public/untrusted networks.
+
+## Linux (Bash) template
+
+Template scripts are also available for Linux-to-Linux SMB over the same local network.
+
+### Included Linux scripts
+
+- `scripts/linux/server/create-smb-share.sh`: installs/configures Samba and creates a share on machine A.
+- `scripts/linux/client/connect-smb-share.sh`: mounts the remote SMB share on machine B.
+- `scripts/linux/client/disconnect-smb-share.sh`: unmounts the share on machine B.
+
+### 1) Machine A (Linux SMB server)
+
+Run as root (or with `sudo`):
+
+```bash
+chmod +x ./scripts/linux/server/create-smb-share.sh
+sudo ./scripts/linux/server/create-smb-share.sh \
+	--share-name LabShare \
+	--share-path /srv/samba/LabShare \
+	--share-user smbuser \
+	--share-password 'ChangeMe123!' \
+	--allowed-subnet 192.168.1.0/24
+```
+
+Take note of:
+
+- Hostname (or LAN IP)
+- Share name
+- SMB username/password
+
+### 2) Machine B (Linux SMB client)
+
+Run as root (or with `sudo`):
+
+```bash
+chmod +x ./scripts/linux/client/connect-smb-share.sh
+sudo ./scripts/linux/client/connect-smb-share.sh \
+	--server-name 192.168.1.10 \
+	--share-name LabShare \
+	--username smbuser \
+	--password 'ChangeMe123!' \
+	--mount-point /mnt/labshare
+```
+
+If name resolution works in your LAN, you can use hostname instead of IP:
+
+```bash
+sudo ./scripts/linux/client/connect-smb-share.sh --server-name my-server-hostname
+```
+
+### 3) Disconnect client mount
+
+```bash
+chmod +x ./scripts/linux/client/disconnect-smb-share.sh
+sudo ./scripts/linux/client/disconnect-smb-share.sh /mnt/labshare
+```
