@@ -118,3 +118,75 @@ sudo ./scripts/linux/client/connect-smb-share.sh --server-name my-server-hostnam
 chmod +x ./scripts/linux/client/disconnect-smb-share.sh
 sudo ./scripts/linux/client/disconnect-smb-share.sh /mnt/labshare
 ```
+
+## Mixed scenarios (Linux <-> Windows)
+
+Use the same scripts for cross-platform SMB between two machines on the same LAN.
+
+### Scenario A: Linux server -> Windows client
+
+1. On Linux machine A, create the Samba share:
+
+```bash
+sudo ./scripts/linux/server/create-smb-share.sh \
+	--share-name LabShare \
+	--share-path /srv/samba/LabShare \
+	--share-user smbuser \
+	--share-password 'ChangeMe123!' \
+	--allowed-subnet 192.168.1.0/24
+```
+
+2. On Windows machine B, connect to the Linux-hosted share:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\windows\client\connect-smb-share.ps1 \
+	-ServerName "192.168.1.10" \
+	-ShareName "LabShare" \
+	-Username "smbuser" \
+	-Password "ChangeMe123!" \
+	-DriveLetter "Z"
+```
+
+3. On Windows machine B, disconnect when done:
+
+```powershell
+.\scripts\windows\client\disconnect-smb-share.ps1 -DriveLetter "Z"
+```
+
+### Scenario B: Windows server -> Linux client
+
+1. On Windows machine A, create the SMB share:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\windows\server\create-smb-share.ps1 \
+	-ShareName "LabShare" \
+	-SharePath "C:\SMB\LabShare" \
+	-ShareUser "smbuser" \
+	-SharePassword "ChangeMe123!" \
+	-AllowedSubnet "192.168.1.0/24"
+```
+
+2. On Linux machine B, mount the Windows-hosted share:
+
+```bash
+sudo ./scripts/linux/client/connect-smb-share.sh \
+	--server-name 192.168.1.20 \
+	--share-name LabShare \
+	--username smbuser \
+	--password 'ChangeMe123!' \
+	--mount-point /mnt/labshare
+```
+
+3. On Linux machine B, unmount when done:
+
+```bash
+sudo ./scripts/linux/client/disconnect-smb-share.sh /mnt/labshare
+```
+
+### Troubleshooting for mixed scenarios
+
+- Prefer LAN IPs if hostname resolution is unreliable.
+- Ensure both hosts are on the same subnet and private/trusted network profile.
+- If mount fails from Linux to Windows, confirm SMB is reachable: `nc -zv <windows-ip> 445`.
