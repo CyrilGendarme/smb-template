@@ -1,77 +1,73 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $false)]
     [string]$ShareName = "LabShare",
-
-    [Parameter(Mandatory = $false)]
-    [string]$SharePath = "C:\\SMB\\LabShare",
-
-    [Parameter(Mandatory = $false)]
+    [string]$SharePath = "C:\SMB\LabShare",
     [string]$ShareUser = "smbuser",
-
-    [Parameter(Mandatory = $false)]
-    [string]$SharePassword = "ChangeMe123!",
-
-    [Parameter(Mandatory = $false)]
+    [string]$SharePassword = "",
     [string]$AllowedSubnet = "192.168.1.0/24"
 )
 
 $ErrorActionPreference = "Stop"
 
-# SMB share creation needs administrator privileges.
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw "Please run this script from an elevated PowerShell session (Run as administrator)."
+# Require admin
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw "Run as Administrator."
 }
 
-Write-Host "[1/6] Ensuring share folder exists: $SharePath"
-if (-not (Test-Path -LiteralPath $SharePath)) {
+Write-Host "[1/8] Ensuring share folder exists"
+if (-not (Test-Path $SharePath)) {
     New-Item -ItemType Directory -Path $SharePath -Force | Out-Null
 }
 
-Write-Host "[2/6] Ensuring local user exists: $ShareUser"
-$localUser = Get-LocalUser -Name $ShareUser -ErrorAction SilentlyContinue
-if (-not $localUser) {
-    $securePassword = ConvertTo-SecureString -String $SharePassword -AsPlainText -Force
-    New-LocalUser -Name $ShareUser -Password $securePassword -PasswordNeverExpires -AccountNeverExpires | Out-Null
+Write-Host "[2/8] Generating secure password if not provided"
+if (-not $SharePassword) {
+    Add-Type -AssemblyName System.Web
+    $SharePassword = [System.Web.Security.Membership]::GeneratePassword(24,5)
 }
 
-$account = "${env:COMPUTERNAME}\\$ShareUser"
+$securePassword = ConvertTo-SecureString $SharePassword -AsPlainText -Force
 
-Write-Host "[3/6] Granting NTFS Modify rights for $account"
-& icacls $SharePath /grant "${account}:(OI)(CI)M" /T | Out-Null
-
-Write-Host "[4/6] Ensuring SMB share exists: $ShareName"
-$existingShare = Get-SmbShare -Name $ShareName -ErrorAction SilentlyContinue
-if (-not $existingShare) {
-    New-SmbShare -Name $ShareName -Path $SharePath -FullAccess $account | Out-Null
+Write-Host "[3/8] Ensuring local user exists"
+if (-not (Get-LocalUser -Name $ShareUser -ErrorAction SilentlyContinue)) {
+    New-LocalUser -Name $ShareUser `
+        -Password $securePassword `
+        -PasswordNeverExpires:$false `
+        -AccountNeverExpires:$false | Out-Null
 }
 
-Write-Host "[5/6] Enabling File and Printer Sharing firewall group on Private profile"
-Set-NetFirewallRule -DisplayGroup "File and Printer Sharing" -Enabled True -Profile Private | Out-Null
+$account = "$env:COMPUTERNAME\$ShareUser"
 
-Write-Host "[6/6] Creating scoped SMB firewall rule (TCP 445) for $AllowedSubnet"
-$ruleName = "Allow SMB 445 from $AllowedSubnet"
-$existingRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-if (-not $existingRule) {
-    New-NetFirewallRule \
-        -DisplayName $ruleName \
-        -Direction Inbound \
-        -Action Allow \
-        -Protocol TCP \
-        -LocalPort 445 \
-        -RemoteAddress $AllowedSubnet \
-        -Profile Private | Out-Null
+Write-Host "[4/8] NTFS permissions (least privilege)"
+icacls $SharePath /grant "${account}:(OI)(CI)M" /T | Out-Null
+
+Write-Host "[5/8] Creating SMB share (no full access)"
+if (-not (Get-SmbShare -Name $ShareName -ErrorAction SilentlyContinue)) {
+    New-SmbShare -Name $ShareName -Path $SharePath -ChangeAccess $account | Out-Null
 }
 
-$serverIp = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias "Ethernet*","Wi-Fi*" -ErrorAction SilentlyContinue |
-    Where-Object { $_.IPAddress -notlike "169.254.*" } |
-    Select-Object -First 1 -ExpandProperty IPAddress)
+Write-Host "[6/8] Enabling SMB encryption"
+Set-SmbShare -Name $ShareName -EncryptData $true
+
+Write-Host "[7/8] Hardening SMB server config"
+Set-SmbServerConfiguration -EnableGuestAccess $false -Force | Out-Null
+
+# Optional NTLM hardening (lab-safe but may break legacy clients)
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" `
+    -Name "LmCompatibilityLevel" -Value 5
+
+Write-Host "[8/8] Firewall rule (scoped)"
+New-NetFirewallRule `
+    -DisplayName "SMB 445 $ShareName" `
+    -Direction Inbound `
+    -Action Allow `
+    -Protocol TCP `
+    -LocalPort 445 `
+    -RemoteAddress $AllowedSubnet `
+    -Profile Private | Out-Null
 
 Write-Host ""
-Write-Host "SMB share template is ready."
-Write-Host "ComputerName : $env:COMPUTERNAME"
-if ($serverIp) { Write-Host "Server IP    : $serverIp" }
-Write-Host "Share UNC    : \\$env:COMPUTERNAME\\$ShareName"
-Write-Host "Username     : $account"
-Write-Host ""
-Write-Host "Next step: run the client template on the second machine."
+Write-Host "SMB READY (SECURED)"
+Write-Host "Share: \\$env:COMPUTERNAME\$ShareName"
+Write-Host "User : $account"
+Write-Host "Password: $SharePassword"
